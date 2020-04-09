@@ -2,6 +2,8 @@ use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
 
+mod room;
+
 fn main() {
     start_server().unwrap();
 }
