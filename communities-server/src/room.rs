@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::io::Result;
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{Shutdown, TcpStream};
 
 pub struct Room<CS: ClientStore> {
     clients: CS,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Message<'a> {
     pub id: &'a str,
     pub body: &'a str,
@@ -19,7 +20,7 @@ pub trait Client {
 
 pub trait ClientStore {
     fn new() -> Self;
-    fn broadcast(&self, message: Message) -> Result<()>;
+    fn broadcast(&mut self, message: Message) -> Result<()>;
     fn add(&mut self, id: &str, client: Box<dyn Client>) -> Result<()>;
     fn remove(&mut self, id: &str) -> Result<()>;
 }
@@ -30,7 +31,8 @@ pub struct TCPClient {
 
 impl Client for TCPClient {
     fn send(&mut self, message: Message) -> Result<()> {
-        println!("send called");
+        println!("{:?}", message);
+        self.stream.write(message.body.as_bytes());
         Ok(())
     }
 
@@ -53,10 +55,10 @@ impl Client for TCPClient {
             }
         } {}
 
-        Ok((Message {
+        Ok(Message {
             id: "abcd",
             body: "test",
-        }))
+        })
     }
 }
 
@@ -71,7 +73,10 @@ impl ClientStore for MemoryStore {
         }
     }
 
-    fn broadcast(&self, message: Message) -> Result<()> {
+    fn broadcast(&mut self, message: Message) -> Result<()> {
+        for v in self.clients.values_mut() {
+            v.send(message)?;
+        }
         Ok(())
     }
 
