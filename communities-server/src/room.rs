@@ -29,6 +29,12 @@ pub struct TCPClient {
     stream: TcpStream,
 }
 
+impl TCPClient {
+    pub fn new(stream: TcpStream) -> Self {
+        TCPClient { stream: stream }
+    }
+}
+
 impl Client for TCPClient {
     fn send(&mut self, message: Message) -> Result<()> {
         println!("{:?}", message);
