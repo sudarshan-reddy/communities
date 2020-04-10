@@ -19,8 +19,8 @@ pub trait Client {
 
 pub trait ClientStore {
     fn new() -> Self;
-    fn broadcast(&self, cl: impl Client, message: Message) -> Result<()>;
-    fn add(&mut self, id: &str) -> Result<()>;
+    fn broadcast(&self, message: Message) -> Result<()>;
+    fn add(&mut self, id: &str, client: Box<dyn Client>) -> Result<()>;
     fn remove(&mut self, id: &str) -> Result<()>;
 }
 
@@ -61,7 +61,7 @@ impl Client for TCPClient {
 }
 
 pub struct MemoryStore {
-    clients: HashMap<String, String>,
+    clients: HashMap<String, Box<dyn Client>>,
 }
 
 impl ClientStore for MemoryStore {
@@ -71,11 +71,12 @@ impl ClientStore for MemoryStore {
         }
     }
 
-    fn broadcast(&self, cl: impl Client, message: Message) -> Result<()> {
+    fn broadcast(&self, message: Message) -> Result<()> {
         Ok(())
     }
 
-    fn add(&mut self, id: &str) -> Result<()> {
+    fn add(&mut self, id: &str, client: Box<dyn Client>) -> Result<()> {
+        self.clients.insert(id.to_string(), client);
         Ok(())
     }
 
