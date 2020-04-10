@@ -32,7 +32,7 @@ pub struct TCPClient {
 impl Client for TCPClient {
     fn send(&mut self, message: Message) -> Result<()> {
         println!("{:?}", message);
-        self.stream.write(message.body.as_bytes());
+        self.stream.write(message.body.as_bytes())?;
         Ok(())
     }
 
