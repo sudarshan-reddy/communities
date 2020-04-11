@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::io::Result;
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpStream};
+use std::net::TcpStream;
 
 pub struct Room<CS: ClientStore> {
     clients: CS,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Message<'a> {
     pub id: &'a str,
     pub body: String,
