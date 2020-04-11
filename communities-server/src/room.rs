@@ -7,20 +7,20 @@ pub struct Room<CS: ClientStore> {
     clients: CS,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Message<'a> {
     pub id: &'a str,
-    pub body: &'a str,
+    pub body: String,
 }
 
 pub trait Client {
-    fn send(&mut self, message: Message) -> Result<()>;
+    fn send(&mut self, message: &Message) -> Result<()>;
     fn receive(&mut self) -> Result<Message>;
 }
 
 pub trait ClientStore {
     fn new() -> Self;
-    fn broadcast(&mut self, message: Message) -> Result<()>;
+    fn broadcast(&mut self, message: &Message) -> Result<()>;
     fn add(&mut self, id: &str, client: Box<dyn Client>) -> Result<()>;
     fn remove(&mut self, id: &str) -> Result<()>;
 }
@@ -36,7 +36,7 @@ impl TCPClient {
 }
 
 impl Client for TCPClient {
-    fn send(&mut self, message: Message) -> Result<()> {
+    fn send(&mut self, message: &Message) -> Result<()> {
         println!("{:?}", message);
         self.stream.write(message.body.as_bytes())?;
         Ok(())
@@ -44,26 +44,11 @@ impl Client for TCPClient {
 
     fn receive(&mut self) -> Result<Message> {
         let mut data = [0; 50];
-        while match self.stream.read(&mut data) {
-            Ok(size) => {
-                if size > 0 {
-                    println!("echoed: {:?}\n", &data[0..size]);
-                }
-                true
-            }
-            Err(_) => {
-                println!(
-                    "An error occurred, terminating connection with {}",
-                    self.stream.peer_addr().unwrap()
-                );
-                self.stream.shutdown(Shutdown::Both).unwrap();
-                false
-            }
-        } {}
+        self.stream.read(&mut data)?;
 
         Ok(Message {
             id: "abcd",
-            body: "test",
+            body: String::from_utf8_lossy(&data).to_string(),
         })
     }
 }
@@ -79,7 +64,7 @@ impl ClientStore for MemoryStore {
         }
     }
 
-    fn broadcast(&mut self, message: Message) -> Result<()> {
+    fn broadcast(&mut self, message: &Message) -> Result<()> {
         for v in self.clients.values_mut() {
             v.send(message)?;
         }
