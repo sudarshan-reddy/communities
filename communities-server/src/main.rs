@@ -1,41 +1,45 @@
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::TcpListener;
+use std::sync::mpsc;
 use std::thread;
 
-mod room;
+const LOCAL: &str = "127.0.0.1:6142";
+const MSG_SIZE: usize = 32;
 
 fn main() {
-    start_server().unwrap();
-}
+    let listener = TcpListener::bind(LOCAL).expect("bind failed");
+    listener.set_nonblocking(true).unwrap();
 
-fn start_server() -> std::io::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:6142")?;
+    let mut clients = vec![];
+    let (tx, rx) = mpsc::channel::<String>();
 
-    for stream in listener.incoming() {
-        //TODO: inject handler through startServer.
-        let res = stream?;
-        thread::spawn(move || handle_client(res));
-    }
-    Ok(())
-}
+    for (mut socket, addr) in listener.accept() {
+        println!("client: {} connected...", addr);
 
-fn handle_client(mut stream: TcpStream) {
-    let mut data = [0; 50];
-    while match stream.read(&mut data) {
-        Ok(size) => {
-            if size > 0 {
-                println!("echoed: {:?}\n", &data[0..size]);
+        let tx = tx.clone();
+        clients.push(socket.try_clone().expect("failed to clone client"));
+
+        thread::spawn(move || loop {
+            let mut buf = vec![0; MSG_SIZE];
+            match socket.read_exact(&mut buf) {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("closing connection with: {} , err: {}", addr, e);
+                    break;
+                }
             }
-            stream.write(&data[0..size]).unwrap();
-            true
-        }
-        Err(_) => {
-            println!(
-                "An error occurred, terminating connection with {}",
-                stream.peer_addr().unwrap()
-            );
-            stream.shutdown(Shutdown::Both).unwrap();
-            false
-        }
-    } {}
+        });
+    }
+
+    for msg in rx.try_recv() {
+        clients = clients
+            .into_iter()
+            .filter_map(|mut client| {
+                let mut buf = msg.clone().into_bytes();
+                buf.resize(MSG_SIZE, 0);
+
+                client.write_all(&buf).map(|_| client).ok()
+            })
+            .collect::<Vec<_>>();
+    }
 }
