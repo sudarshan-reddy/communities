@@ -1,16 +1,18 @@
 use std::io::{ErrorKind, Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
 use std::thread;
 
 const LOCAL: &str = "127.0.0.1:12233";
 const MSG_SIZE: usize = 32;
 
+mod room;
+
 fn main() {
     let listener = TcpListener::bind(LOCAL).expect("bind failed");
     listener.set_nonblocking(true).unwrap();
 
-    let mut clients = vec![];
+    let mut clients: Vec<TcpStream> = vec![];
     let (tx, rx) = mpsc::channel::<String>();
 
     loop {
