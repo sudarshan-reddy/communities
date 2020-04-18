@@ -1,95 +1,71 @@
-use std::fmt;
-use std::io::{ErrorKind, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::prelude::*;
+use tokio::sync::mpsc::{Receiver, Sender};
 
-const MSG_SIZE: usize = 32;
-
-pub struct Room<'a, T> {
-    clients: Vec<Client<'a, T>>,
-    tx: Sender<T>,
-    rx: Receiver<T>,
+#[derive(Clone)]
+struct Client {
+    id: String,
+    tx: Sender<Message>,
 }
 
-impl<'a, T> Room<'a, T> {
+pub enum Message {
+    Message(String, String),
+    Type(MessageType),
+}
+
+pub enum MessageType {
+    Client,
+    Server,
+}
+
+struct Room {
+    // TODO: Make this threadsafe.
+    connected_clients: RefCell<HashMap<SocketAddr, Client>>,
+}
+
+impl Room {
     fn new() -> Self {
-        let (tx, rx) = mpsc::channel();
         Room {
-            clients: vec![],
-            tx: tx,
-            rx: rx,
+            connected_clients: RefCell::new(HashMap::new()),
         }
     }
 
-    fn newClient(&self, stream: TcpStream) -> Client<T> {
-        let client = Client::new(stream, self.tx.clone(), &self.rx);
-        client
+    fn add(&self, addr: SocketAddr, client: Client) {
+        self.connected_clients.borrow_mut().insert(addr, client);
+    }
+
+    fn remove(&self, addr: &SocketAddr) -> Option<Client> {
+        self.connected_clients.borrow_mut().remove(addr)
     }
 }
 
-#[derive(Debug)]
-pub struct Client<'a, T> {
-    socket: TcpStream,
-    tx: Sender<T>,
-    rx: &'a Receiver<T>,
-}
+pub struct Server {}
 
-impl<'a, T> Client<'a, T> {
-    pub fn new(stream: TcpStream, tx: Sender<T>, rx: &'a Receiver<T>) -> Self {
-        Client {
-            socket: stream,
-            tx: tx,
-            rx: rx,
-        }
+impl Server {
+    pub fn new() -> Self {
+        Server {}
     }
 
-    pub fn send(&mut self, msg: T) -> Result<(), ClientError<T>> {
-        let mut buf = vec![0; MSG_SIZE];
-        match self.socket.read(&mut buf) {
-            Ok(_) => {
-                //let msg = buf.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
-                //let msg = String::from_utf8(msg).expect("Invalid utf8 message");
-
-                self.tx.send(msg)?;
+    fn start(addr: &str) {
+        let addr : String = addr.parse().unwrap();
+        let mut listener = TcpListener::bind(&addr).unwrap();
+        let server = async move {
+            let mut incoming = listener.incoming();
+            while let Some(socket_res) = incoming.next().await {
+                match socket_res {
+                    Ok(socket) => {
+                        println!("Accepted connection from {:?}", socket.peer_addr());
+                        // TODO: Process socket
+                    } 
+                    Err(err) => {
+                        // Handle error by printing to STDOUT.
+                        println!("accept error = {:?}", err);
+                    }
+                }
             }
-            Err(ref err) if err.kind() == ErrorKind::WouldBlock => (),
-            Err(e) => {
-                println!("err: {}", e);
-            }
-        }
-        Ok(())
-    }
-
-    pub fn receive(&self) -> Result<T, ClientError<T>> {
-        let res = self.rx.try_recv()?;
-        Ok(res)
-    }
-}
-
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum ClientError<T> {
-    Recv(mpsc::TryRecvError),
-    Send(mpsc::SendError<T>),
-}
-
-impl<T> fmt::Display for ClientError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            ClientError::Recv(ref err) => err.fmt(f),
-            ClientError::Send(ref err) => err.fmt(f),
-        }
-    }
-}
-
-impl<T> From<mpsc::TryRecvError> for ClientError<T> {
-    fn from(err: mpsc::TryRecvError) -> ClientError<T> {
-        ClientError::Recv(err)
-    }
-}
-
-impl<T> From<mpsc::SendError<T>> for ClientError<T> {
-    fn from(err: mpsc::SendError<T>) -> ClientError<T> {
-        ClientError::Send(err)
+        };
     }
 }
