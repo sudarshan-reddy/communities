@@ -10,9 +10,11 @@ pub struct Server {
     tx: Sender<InputMessage>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct InputMessage {
     id: String,
+    // TODO: change this out with an enum.
+    action: String,
     msg: String,
 }
 
@@ -21,6 +23,15 @@ struct ServerMessage {
     sender: String,
     msg: String,
     error: bool,
+}
+
+struct action {
+    msg_type: msgType,
+}
+
+enum msgType {
+    error,
+    broadcast,
 }
 
 impl Server {
@@ -45,27 +56,39 @@ impl Server {
                     handle_client(&socket, tx.clone());
                 });
             }
+
+            self.broadcast();
         }
     }
 
-    fn broadcast_listener() {}
+    fn broadcast(&self) {
+        if let Ok(msg) = self.rx.try_recv() {
+            self.clients.iter().map(|client| {
+                serde_json::to_writer(
+                    client.clone(),
+                    &ServerMessage {
+                        sender: msg.id.clone(),
+                        msg: msg.msg.clone(),
+                        error: false,
+                    },
+                )
+                .unwrap();
+            });
+        }
+    }
 }
 
-fn handle_client(stream: &TcpStream, tx: Sender<InputMessage>) {
+fn handle_client(stream: &TcpStream, tx: Sender<InputMessage>) -> crate::Result<()> {
     let client_request: InputMessage = match serde_json::from_reader(stream.try_clone().unwrap()) {
         Ok(v) => v,
-        Err(e) => {
-            serde_json::to_writer(
-                stream,
-                &ServerMessage {
-                    sender: "server".to_string(),
-                    msg: e.to_string(),
-                    error: true,
-                },
-            )
-            .unwrap();
-            return;
-        }
+        Err(e) => serde_json::to_writer(
+            stream,
+            &ServerMessage {
+                sender: "server".to_string(),
+                msg: e.to_string(),
+                error: true,
+            },
+        )?,
     };
     tx.send(client_request).unwrap();
 }
