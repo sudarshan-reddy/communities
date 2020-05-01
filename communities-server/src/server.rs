@@ -14,7 +14,6 @@ pub struct Server {
 struct InputMessage {
     id: String,
     // TODO: change this out with an enum.
-    action: String,
     msg: String,
 }
 
@@ -56,8 +55,8 @@ impl Server {
                 let tx = self.tx.clone();
                 self.clients.push(socket.try_clone()?);
                 println!("connected to {:?}", addr);
-                thread::spawn(move || loop {
-                    handle_client(&socket, tx.clone());
+                thread::spawn(move || {
+                    handle_client(&socket, &tx).unwrap();
                 });
             }
 
@@ -67,7 +66,8 @@ impl Server {
 
     fn broadcast(&self) {
         if let Ok(msg) = self.rx.try_recv() {
-            self.clients.iter().map(|client| {
+            println!("recv: {:?}", msg);
+            for client in &self.clients {
                 serde_json::to_writer(
                     client.clone(),
                     &ServerMessage {
@@ -77,12 +77,12 @@ impl Server {
                     },
                 )
                 .unwrap();
-            });
+            }
         }
     }
 }
 
-fn handle_client(stream: &TcpStream, tx: Sender<Action>) -> crate::Result<()> {
+fn handle_client(stream: &TcpStream, tx: &Sender<Action>) -> crate::Result<()> {
     let client_request: InputMessage = match serde_json::from_reader(stream.try_clone().unwrap()) {
         Ok(v) => v,
         Err(e) => {
@@ -91,6 +91,7 @@ fn handle_client(stream: &TcpStream, tx: Sender<Action>) -> crate::Result<()> {
                 msg: e.to_string(),
                 sender: "server".to_string(),
             };
+            println!("error: {:?}", action);
             tx.send(action)?;
             return Err(Box::new(e));
         }
@@ -102,6 +103,7 @@ fn handle_client(stream: &TcpStream, tx: Sender<Action>) -> crate::Result<()> {
         sender: client_request.id.clone(),
     };
 
+    println!("msg: {:?}", action);
     tx.send(action).unwrap();
     Ok(())
 }
