@@ -6,8 +6,8 @@ use std::thread;
 pub struct Server {
     listener: TcpListener,
     clients: Vec<TcpStream>,
-    rx: Receiver<InputMessage>,
-    tx: Sender<InputMessage>,
+    rx: Receiver<Action>,
+    tx: Sender<Action>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -25,13 +25,17 @@ struct ServerMessage {
     error: bool,
 }
 
-struct action {
-    msg_type: msgType,
+#[derive(Debug)]
+struct Action {
+    msg_type: MsgType,
+    msg: String,
+    sender: String,
 }
 
-enum msgType {
-    error,
-    broadcast,
+#[derive(Debug, Clone, Copy)]
+enum MsgType {
+    Error,
+    Broadcast,
 }
 
 impl Server {
@@ -67,7 +71,7 @@ impl Server {
                 serde_json::to_writer(
                     client.clone(),
                     &ServerMessage {
-                        sender: msg.id.clone(),
+                        sender: msg.sender.clone(),
                         msg: msg.msg.clone(),
                         error: false,
                     },
@@ -78,17 +82,26 @@ impl Server {
     }
 }
 
-fn handle_client(stream: &TcpStream, tx: Sender<InputMessage>) -> crate::Result<()> {
+fn handle_client(stream: &TcpStream, tx: Sender<Action>) -> crate::Result<()> {
     let client_request: InputMessage = match serde_json::from_reader(stream.try_clone().unwrap()) {
         Ok(v) => v,
-        Err(e) => serde_json::to_writer(
-            stream,
-            &ServerMessage {
-                sender: "server".to_string(),
+        Err(e) => {
+            let action = Action {
+                msg_type: MsgType::Error,
                 msg: e.to_string(),
-                error: true,
-            },
-        )?,
+                sender: "server".to_string(),
+            };
+            tx.send(action)?;
+            return Err(Box::new(e));
+        }
     };
-    tx.send(client_request).unwrap();
+
+    let action = Action {
+        msg_type: MsgType::Broadcast,
+        msg: client_request.msg.clone(),
+        sender: client_request.id.clone(),
+    };
+
+    tx.send(action).unwrap();
+    Ok(())
 }
