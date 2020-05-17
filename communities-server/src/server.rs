@@ -1,109 +1,206 @@
-use serde::{Deserialize, Serialize};
-use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
+//! `ChatServer` is an actor. It maintains list of connection client session.
+//! And manages available rooms. Peers send messages to other peers in same
+//! room through `ChatServer`.
 
-pub struct Server {
-    listener: TcpListener,
-    clients: Vec<TcpStream>,
-    rx: Receiver<Action>,
-    tx: Sender<Action>,
+use actix::prelude::*;
+use rand::{self, rngs::ThreadRng, Rng};
+use std::collections::{HashMap, HashSet};
+
+/// Chat server sends this messages to session
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct Message(pub String);
+
+/// Message for chat server communications
+
+/// New chat session is created
+#[derive(Message)]
+#[rtype(usize)]
+pub struct Connect {
+    pub addr: Recipient<Message>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct InputMessage {
-    id: String,
-    // TODO: change this out with an enum.
-    msg: String,
+/// Session is disconnected
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct Disconnect {
+    pub id: usize,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct ServerMessage {
-    sender: String,
-    msg: String,
-    error: bool,
+/// Send message to specific room
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct ClientMessage {
+    /// Id of the client session
+    pub id: usize,
+    /// Peer message
+    pub msg: String,
+    /// Room name
+    pub room: String,
 }
 
-#[derive(Debug)]
-struct Action {
-    msg_type: MsgType,
-    msg: String,
-    sender: String,
+/// List of available rooms
+pub struct ListRooms;
+
+impl actix::Message for ListRooms {
+    type Result = Vec<String>;
 }
 
-#[derive(Debug, Clone, Copy)]
-enum MsgType {
-    Error,
-    Broadcast,
+/// Join room, if room does not exists create new one.
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct Join {
+    /// Client id
+    pub id: usize,
+    /// Room name
+    pub name: String,
 }
 
-impl Server {
-    pub fn new(addr: &str) -> Self {
-        let listener = TcpListener::bind(addr).unwrap();
-        let (tx, rx) = mpsc::channel();
-        Server {
-            listener: listener,
-            clients: Vec::new(),
-            rx: rx,
-            tx: tx,
+/// `ChatServer` manages chat rooms and responsible for coordinating chat
+/// session. implementation is super primitive
+pub struct ChatServer {
+    sessions: HashMap<usize, Recipient<Message>>,
+    rooms: HashMap<String, HashSet<usize>>,
+    rng: ThreadRng,
+}
+
+impl Default for ChatServer {
+    fn default() -> ChatServer {
+        // default room
+        let mut rooms = HashMap::new();
+        rooms.insert("Main".to_owned(), HashSet::new());
+
+        ChatServer {
+            sessions: HashMap::new(),
+            rooms,
+            rng: rand::thread_rng(),
         }
     }
+}
 
-    pub fn run(&mut self) -> crate::Result<()> {
-        loop {
-            if let Ok((socket, addr)) = self.listener.accept() {
-                let tx = self.tx.clone();
-                self.clients.push(socket.try_clone()?);
-                println!("connected to {:?}", addr);
-                thread::spawn(move || {
-                    handle_client(&socket, &tx).unwrap();
-                });
+impl ChatServer {
+    /// Send message to all users in the room
+    fn send_message(&self, room: &str, message: &str, skip_id: usize) {
+        if let Some(sessions) = self.rooms.get(room) {
+            for id in sessions {
+                if *id != skip_id {
+                    if let Some(addr) = self.sessions.get(id) {
+                        let _ = addr.do_send(Message(message.to_owned()));
+                    }
+                }
             }
-
-            self.broadcast();
-        }
-    }
-
-    fn broadcast(&self) {
-        if let Ok(msg) = self.rx.try_recv() {
-            println!("recv: {:?}", msg);
-            for client in &self.clients {
-                serde_json::to_writer(
-                    client.clone(),
-                    &ServerMessage {
-                        sender: msg.sender.clone(),
-                        msg: msg.msg.clone(),
-                        error: false,
-                    },
-                )
-                .unwrap();
-            }
         }
     }
 }
 
-fn handle_client(stream: &TcpStream, tx: &Sender<Action>) -> crate::Result<()> {
-    let client_request: InputMessage = match serde_json::from_reader(stream.try_clone().unwrap()) {
-        Ok(v) => v,
-        Err(e) => {
-            let action = Action {
-                msg_type: MsgType::Error,
-                msg: e.to_string(),
-                sender: "server".to_string(),
-            };
-            println!("error: {:?}", action);
-            tx.send(action)?;
-            return Err(Box::new(e));
+/// Make actor from `ChatServer`
+impl Actor for ChatServer {
+    /// We are going to use simple Context, we just need ability to communicate
+    /// with other actors.
+    type Context = Context<Self>;
+}
+
+/// Handler for Connect message.
+///
+/// Register new session and assign unique id to this session
+impl Handler<Connect> for ChatServer {
+    type Result = usize;
+
+    fn handle(&mut self, msg: Connect, _: &mut Context<Self>) -> Self::Result {
+        println!("Someone joined");
+
+        // notify all users in same room
+        self.send_message(&"Main".to_owned(), "Someone joined", 0);
+
+        // register session with random id
+        let id = self.rng.gen::<usize>();
+        self.sessions.insert(id, msg.addr);
+
+        // auto join session to Main room
+        self.rooms
+            .entry("Main".to_owned())
+            .or_insert(HashSet::new())
+            .insert(id);
+
+        // send id back
+        id
+    }
+}
+
+/// Handler for Disconnect message.
+impl Handler<Disconnect> for ChatServer {
+    type Result = ();
+
+    fn handle(&mut self, msg: Disconnect, _: &mut Context<Self>) {
+        println!("Someone disconnected");
+
+        let mut rooms: Vec<String> = Vec::new();
+
+        // remove address
+        if self.sessions.remove(&msg.id).is_some() {
+            // remove session from all rooms
+            for (name, sessions) in &mut self.rooms {
+                if sessions.remove(&msg.id) {
+                    rooms.push(name.to_owned());
+                }
+            }
         }
-    };
+        // send message to other users
+        for room in rooms {
+            self.send_message(&room, "Someone disconnected", 0);
+        }
+    }
+}
 
-    let action = Action {
-        msg_type: MsgType::Broadcast,
-        msg: client_request.msg.clone(),
-        sender: client_request.id.clone(),
-    };
+/// Handler for Message message.
+impl Handler<ClientMessage> for ChatServer {
+    type Result = ();
 
-    println!("msg: {:?}", action);
-    tx.send(action).unwrap();
-    Ok(())
+    fn handle(&mut self, msg: ClientMessage, _: &mut Context<Self>) {
+        self.send_message(&msg.room, msg.msg.as_str(), msg.id);
+    }
+}
+
+/// Handler for `ListRooms` message.
+impl Handler<ListRooms> for ChatServer {
+    type Result = MessageResult<ListRooms>;
+
+    fn handle(&mut self, _: ListRooms, _: &mut Context<Self>) -> Self::Result {
+        let mut rooms = Vec::new();
+
+        for key in self.rooms.keys() {
+            rooms.push(key.to_owned())
+        }
+
+        MessageResult(rooms)
+    }
+}
+
+/// Join room, send disconnect message to old room
+/// send join message to new room
+impl Handler<Join> for ChatServer {
+    type Result = ();
+
+    fn handle(&mut self, msg: Join, _: &mut Context<Self>) {
+        let Join { id, name } = msg;
+        let mut rooms = Vec::new();
+
+        // remove session from all rooms
+        for (n, sessions) in &mut self.rooms {
+            if sessions.remove(&id) {
+                rooms.push(n.to_owned());
+            }
+        }
+        // send message to other users
+        for room in rooms {
+            self.send_message(&room, "Someone disconnected", 0);
+        }
+
+        self.rooms
+            .entry(name.clone())
+            .or_insert(HashSet::new())
+            .insert(id);
+
+        self.send_message(&name, "Someone connected", id);
+    }
 }
